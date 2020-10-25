@@ -29,23 +29,51 @@ function getRequestTokenAndRedirectClient()
     }
 }
 
+function getCookie(name) {
+    const dc = document.cookie;
+    const prefix = name + "=";
+    let begin = dc.indexOf("; " + prefix);
+
+    if (begin == -1) {
+        begin = dc.indexOf(prefix);
+        if (begin != 0) {
+            return null;
+        }
+    }
+    else {
+        begin += 2;
+        var end = document.cookie.indexOf(";", begin);
+        if (end == -1) {
+            end = dc.length;
+        }
+    }
+    // because unescape has been deprecated, replaced with decodeURI
+    //return unescape(dc.substring(begin + prefix.length, end));
+    return decodeURI(dc.substring(begin + prefix.length, end));
+}
+
 function checkFlickrAuth()
 {
-    let needToAuth = true;
+    // If we have a session ID, don't need to auth
+    client_session_id = getCookie( 'client_session_id' ); 
+
+    const needToAuth = (client_session_id === null);
 
     if ( needToAuth === true ) {
         // Tell API endpoint to start auth process
         getRequestTokenAndRedirectClient();
     }
-
 }
 
-
-function windowLoaded()
+function getClientSessionId()
 {
-    console.log( "Inside WindowLoaded" );
-
-    checkFlickrAuth();
+    return client_session_id;
 }
 
-window.onload = windowLoaded;
+
+/** 
+ * Don't wait for window to load, we're intentionally doing a blocking load, so run
+ * straight to auth ASAP 
+ */
+var client_session_id = null;
+checkFlickrAuth();

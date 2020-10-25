@@ -158,7 +158,7 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
                 json.dump( access_token_dict, access_token_file_handle, indent=4, sort_keys=True )
 
             # Redirect to page where client will save their session ID as a cookie
-            self.redirect( "https://groupaddrapi.sixbuckssolutions.com/auth/store_client_session_id/{0}".format(
+            self.redirect( "https://groupaddrapi.sixbuckssolutions.com/store_client_session_id.html?client_session_id={0}".format(
                 client_session_id) )
 
         else:
