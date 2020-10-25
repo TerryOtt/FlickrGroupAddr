@@ -1,9 +1,32 @@
 import tornado.ioloop
 import tornado.web
-import os
+import os.path
 import tornado.tcpserver
 import ssl
 import logging
+
+
+class StaticFileHandler(tornado.web.RequestHandler):
+    def get(self, requested_path):
+        static_file_root_dir = "static"
+        #self.write( "asked for static file with path \"{0}\"".format(requested_path) )
+
+        # If asked for root, convert that into an index.html call
+        if len(requested_path) == 0 or requested_path == "/":
+            search_path = os.path.join( static_file_root_dir, "index.html" )
+        else:
+            search_path = os.path.join( static_file_root_dir, requested_path )
+
+        #self.write( "File search path: {0}".format(search_path) ) 
+
+        if os.path.isfile( search_path ) is True:
+            with open( search_path, "r") as static_file_handle:
+                file_contents = static_file_handle.read()
+                
+            self.write( file_contents )
+        else:
+            self.set_status( 404, "File at path \"{0}\" does not exist" )
+
 
 
 class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
@@ -29,7 +52,7 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
             valid_operations[ operation ]()
         else:
             error_string = "Invalid operation requested: \"{0}\"".format(operation)
-            self._set_status( 404, error_string )
+            self.set_status( 404, error_string )
             self.write( 
                 { 
                     "status"        : "error",
@@ -50,6 +73,7 @@ def _make_app():
     return tornado.web.Application(
         [
             (r"^\/api/v1/(.+)\s*$", FlickrGroupAddrEndpointHandler ),
+            (r"^\/(.*?)$", StaticFileHandler ),
         ],
         debug=True
     )
