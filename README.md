@@ -5,7 +5,7 @@
 ### Python modules
 
 ```
-$ sudo apt-get -y install python3-pip certbot
+$ sudo apt-get -y install python3-pip certbot flickr_api
 $ sudo pip3 install tornado
 ```
 

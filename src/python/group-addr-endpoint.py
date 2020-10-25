@@ -1,9 +1,25 @@
 import tornado.ioloop
 import tornado.web
+import os
 import os.path
 import tornado.tcpserver
 import ssl
 import logging
+import flickr_api
+import pprint
+import uuid
+import json
+
+
+flickr_auth_info = {
+    "api_key"   : "80aa90492203094f9fad6b8032f5948b",
+    "secret"    : "69003acec0548150"
+}
+
+flickr_api.set_keys(
+    api_key     = flickr_auth_info['api_key'],
+    api_secret  = flickr_auth_info['secret']
+)
 
 
 class StaticFileHandler(tornado.web.RequestHandler):
@@ -25,11 +41,24 @@ class StaticFileHandler(tornado.web.RequestHandler):
                 
             self.write( file_contents )
         else:
-            self.set_status( 404, "File at path \"{0}\" does not exist" )
+            self.set_status( 404, "File at path \"{0}\" does not exist".format(search_path) )
 
 
 
 class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
+
+    # Don't override __init__ in a handler, per Tornado docs
+    def initialize(self):
+        self.flickr_auth = {
+            "api_key"   : "80aa90492203094f9fad6b8032f5948b",
+            "secret"    : "69003acec0548150"
+        }
+
+        flickr_api.set_keys( 
+            api_key     = self.flickr_auth['api_key'], 
+            api_secret  = self.flickr_auth['secret']
+        )
+
     def set_default_headers(self):
         self.set_header("Access-Control-Allow-Origin",      "*")
         self.set_header("Access-Control-Allow-Headers",     "x-requested-with")
@@ -45,6 +74,8 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
     def get(self, operation ):
         valid_operations = {
             "ping"          : self._do_ping,
+            "auth/start"    : self._auth_create_request_token,
+            "auth/callback" : self._auth_callback
         }
 
         if operation in valid_operations:
@@ -64,9 +95,75 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
     def _do_ping(self):
         self.write( 
             { 
-                "result"    : "pong " 
+                "result"    : "success",
+                "data"      : "pong",
             }
         )
+
+    def _auth_create_request_token(self):
+        auth_handler = flickr_api.auth.AuthHandler(
+            callback="https://groupaddrapi.sixbuckssolutions.com/api/v1/auth/callback"
+        )
+        perms = "read"
+        authorization_url = auth_handler.get_authorization_url( perms )
+
+        # Store the auth handler context so we can recreate it when we get our callback
+        auth_handler_dict = auth_handler.todict() 
+        with open( "request_token_{0}.json".format(auth_handler_dict['request_token_key']), "w" ) as file_handle:
+            json.dump( auth_handler_dict, file_handle, indent=4, sort_keys=True )
+
+        self.write( 
+            {
+
+                "result"            : "success",
+                "authorization_url" : authorization_url
+            }
+        )
+
+
+
+    def _auth_callback( self ):
+        try:
+            oauth_token     = self.get_argument( 'oauth_token' )
+            oauth_verifier  = self.get_argument( 'oauth_verifier' )
+
+            logging.debug( "   Token : {0}".format(oauth_token) )
+            logging.debug( "Verifier : {0}".format(oauth_verifier) )
+        except e as MissingArgumentException:
+            self.set_status( 400, "oauth_token and/or oauth_verifier argument missing" )
+            return
+
+        # If we have a matching outstanding request, re-create the AuthHandler for that object
+        state_file =  "request_token_{0}.json".format(oauth_token)
+        if os.path.isfile( state_file ) is True:
+            with open( state_file, 'r' ) as request_token_file_handle:
+                request_token_dict = json.load( request_token_file_handle )
+
+            # Reconstitute auth handler from JSON
+            auth_handler = flickr_api.auth.AuthHandler.fromdict( request_token_dict )
+
+            # Unlink request token state file, loop is closed
+            os.remove( state_file )
+
+            # Add the verifier to the request token, will change internal state of auth handler from 
+            #       a request token to an access token
+            auth_handler.set_verifier( oauth_verifier )
+
+            # Create GUID which is all the client will ever see
+            client_session_id = uuid.uuid4()
+
+            # Persist the access token 
+            access_token_dict = auth_handler.todict()
+            with open( "access_token_{0}.json".format(str(client_session_id)), "w" ) as access_token_file_handle:
+                json.dump( access_token_dict, access_token_file_handle, indent=4, sort_keys=True )
+
+            # Redirect to page where client will save their session ID as a cookie
+            self.redirect( "https://groupaddrapi.sixbuckssolutions.com/auth/store_client_session_id/{0}".format(
+                client_session_id) )
+
+        else:
+            self.set_status( 403, "No outstanding requests for request token key {0}".format(oauth_token) )
+
 
 
 def _make_app():
@@ -123,6 +220,7 @@ def _make_ssl_ctx():
     ssl_ctx.load_cert_chain( crt_file, key_file ) 
 
     return ssl_ctx
+
 
 if __name__ == "__main__":
     logging.basicConfig( level=logging.DEBUG )
