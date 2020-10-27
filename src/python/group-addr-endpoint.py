@@ -71,16 +71,17 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
         self.finish()
 
 
-    def get(self, operation ):
+    def get(self, operation, session_id ):
         valid_operations = {
-            "ping"          : self._do_ping,
-            "auth/start"    : self._auth_create_request_token,
-            "auth/callback" : self._auth_callback
+            "ping"              : self._do_ping,
+            "auth-start"        : self._auth_create_request_token,
+            "auth-callback"     : self._auth_callback,
+            "user-info"         : self._get_user_info,
         }
 
         if operation in valid_operations:
             logging.info( "Valid operation requested: {0}".format(operation) )
-            valid_operations[ operation ]()
+            valid_operations[ operation ]( session_id )
         else:
             error_string = "Invalid operation requested: \"{0}\"".format(operation)
             self.set_status( 404, error_string )
@@ -100,9 +101,9 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
             }
         )
 
-    def _auth_create_request_token(self):
+    def _auth_create_request_token(self, session_id=None):
         auth_handler = flickr_api.auth.AuthHandler(
-            callback="https://groupaddrapi.sixbuckssolutions.com/api/v1/auth/callback"
+            callback="https://groupaddrapi.sixbuckssolutions.com/api/v1/auth-callback"
         )
         perms = "read"
         authorization_url = auth_handler.get_authorization_url( perms )
@@ -122,7 +123,7 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
 
 
 
-    def _auth_callback( self ):
+    def _auth_callback( self, session_id=None ):
         try:
             oauth_token     = self.get_argument( 'oauth_token' )
             oauth_verifier  = self.get_argument( 'oauth_verifier' )
@@ -158,19 +159,119 @@ class FlickrGroupAddrEndpointHandler(tornado.web.RequestHandler):
                 json.dump( access_token_dict, access_token_file_handle, indent=4, sort_keys=True )
 
             # Redirect to page where client will save their session ID as a cookie
-            self.redirect( "https://groupaddrapi.sixbuckssolutions.com/store_client_session_id.html?client_session_id={0}".format(
+            self.redirect( "https://groupaddr.sixbuckssolutions.com/store_client_session_id.html?client_session_id={0}".format(
                 client_session_id) )
 
         else:
             self.set_status( 403, "No outstanding requests for request token key {0}".format(oauth_token) )
 
 
+    def _get_flickr_user(self):
+        return flickr_api.test.login()
+
+
+    def _get_flickr_photo_ids(self, flickr_user):
+        curr_results_page = 1 
+
+        # Flickr API defaults to 100 results per page, with max of 500. Let's do 500 to reduce amount of work
+        photos_per_results_page = 500
+
+        photo_ids = []
+
+        done_reading = False
+
+        while done_reading is False:
+            logging.debug("Reading photos results page {0}".format(curr_results_page) )
+            curr_results = flickr_user.getPhotos(page = curr_results_page, per_page = photos_per_results_page)
+
+            # If this is the first read, find out total number of photos and pages
+            if curr_results_page == 1:
+                total_number_photos = curr_results.info.total
+                total_number_pages = curr_results.info.pages
+                logging.debug("Total number of pages: {0}".format(
+                    curr_results.info.pages) )
+
+            # Add the photo ID's in this results set to our master list 
+            for curr_photo in curr_results:
+                photo_ids.append( int(curr_photo.id) )
+
+            # Did we just read the last page of photos?
+            if curr_results_page == total_number_pages:
+                break
+            else:
+                curr_results_page += 1
+
+        photo_ids.sort()
+
+        return photo_ids
+
+
+    def _get_groups( self ):
+        group_info = []
+        logging.debug("Getting groups this user can add photos to")
+        #flickr_groups = flickr_api.Group.getGroups()
+        group_walker = flickr_api.Walker(flickr_api.Group.getGroups)
+        for curr_group in group_walker:
+            group_info.append( 
+                {
+                    "id"            : curr_group.id,
+                    "name"          : curr_group.name
+                }
+            )
+        logging.debug("Group listing complete")
+
+        return group_info
+
+
+    def _get_user_info(self, session_id ):
+        logging.debug( "Session ID: {0}".format(session_id) )
+
+        # Do we know anything about this session ID?
+        access_token_file =  "access_token_{0}.json".format( session_id )
+
+        if os.path.isfile( access_token_file ) is True:
+            logging.info( "Session ID {0} is known and has an access token".format(session_id) )
+            with open( access_token_file, "r" ) as access_token_file_handle:
+                access_token_info = json.load( access_token_file_handle )
+
+            #logging.debug( "Access token info:\n{0}".format( json.dumps(access_token_info, indent=4, sort_keys=True)))
+        else:
+            self.set_status( 400, "Unknown session ID {0}".format(session_id) )
+            return
+
+        auth_handler = flickr_api.auth.AuthHandler.fromdict( access_token_info )
+
+        flickr_api.set_auth_handler( auth_handler )
+
+        # Now fully authorized
+
+        # Get currently logged-in user
+        flickr_user = self._get_flickr_user()
+
+        # Get all relevant info for the page
+        user_info = {
+            'id'        : flickr_user.id,
+            'username'  : flickr_user.username 
+        }
+        #flickr_photo_ids    = self._get_flickr_photo_ids( flickr_user )
+        flickr_groups = self._get_groups()
+
+        self.write( 
+            {
+                "user_info"         : user_info,
+                "public_groups"     : flickr_groups,
+            }
+        )
+
+
+
+
 
 def _make_app():
     return tornado.web.Application(
         [
-            (r"^\/api/v1/(.+)\s*$", FlickrGroupAddrEndpointHandler ),
-            (r"^\/(.*?)$", StaticFileHandler ),
+            (r"^/api/v1/([^/]*)/?(.+)?\s*$", FlickrGroupAddrEndpointHandler ),
+            (r"^/(.*?)$", StaticFileHandler ),
         ],
         debug=True
     )
@@ -178,7 +279,7 @@ def _make_app():
 
 def _quiet_other_loggers():
     other_loggers = [
-        "asyncio",
+        "asyncio", "urllib3", "flickr_api"
     ]
  
     for curr_logger in other_loggers:

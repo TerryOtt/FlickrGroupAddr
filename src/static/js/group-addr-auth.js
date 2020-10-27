@@ -8,6 +8,7 @@ function processRequestTokenResponse( httpResponse )
         tokenResponse['authorization_url'] + "\"" );
     */
 
+    // Bounce the user's browser to the URL where Flickr will ask for authorization
     window.location.replace( tokenResponse['authorization_url'] );
 }
 
